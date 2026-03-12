@@ -28,6 +28,13 @@ COLUMN_HINTS = {
 # IOC types that become actual IOC records
 IOC_MAPPABLE = {"AM_USER", "DEALER_ID", "IP", "VIN", "SUB_ID", "TOOL", "MAC"}
 
+# Internal IP prefixes to ignore during CSV ingest
+INTERNAL_IP_PREFIXES = ("10.", "19.", "100.", "172.")
+
+def is_internal_ip(value: str) -> bool:
+    """Check if an IP address is internal/private and should be skipped."""
+    return any(value.startswith(prefix) for prefix in INTERNAL_IP_PREFIXES)
+
 
 def guess_column_type(col_name: str) -> str:
     """Guess the IOC type from a column name."""
@@ -114,6 +121,9 @@ def ingest_csv(filepath: str, column_mapping: Dict[int, str], source_label: str 
             elif ioc_type == "DEVICE":
                 row_meta["device"] = val
             elif ioc_type in IOC_MAPPABLE:
+                # Skip internal IPs
+                if ioc_type == "IP" and is_internal_ip(val):
+                    continue
                 key = (ioc_type, val)
                 row_items.append(key)
 

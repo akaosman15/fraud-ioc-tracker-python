@@ -30,7 +30,7 @@ IOC_TYPES = {
     "MAC": ("📡 MAC Address", "#a5d6a7"),
 }
 IP_TYPES = ["Residential", "Datacenter", "Proxy", "VPN", "Tor Exit", "Mobile", "Hosting", "CDN"]
-ACTIONS = ["Suspended", "Monitor", "Investigate", "Escalate", "Quarantine", "Added to Compromised List", "Purchase Tool"]
+ACTIONS = ["Suspended", "Monitor", "Investigate", "Escalate", "Quarantine", "Compromised List", "Purchase Tool"]
 SOURCES = ["AutoThreat", "Upstream Detector", "Manual"]
 
 DARK_STYLE = """
@@ -118,6 +118,11 @@ class AddIOCDialog(QDialog):
         self.existing_iocs = existing_iocs
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
+
+        # Custom ID
+        self.custom_id_edit = QLineEdit()
+        self.custom_id_edit.setPlaceholderText("Auto-generated if blank. Enter AutoThreat/Upstream ID here.")
+        layout.addWidget(_field("IOC ID (optional — for AutoThreat/Upstream IDs)", self.custom_id_edit))
 
         # Type + Threat
         row1 = QHBoxLayout()
@@ -423,7 +428,7 @@ class AddIOCDialog(QDialog):
             tool_cost = self.tool_cost.value()
 
         return {
-            "id": gen_id("IOC"),
+            "id": self.custom_id_edit.text().strip() or gen_id("IOC"),
             "type": ioc_type,
             "value": self.value_edit.text().strip(),
             "threatLevel": self.threat_combo.currentText(),
@@ -575,6 +580,107 @@ class SettingsDialog(QDialog):
 # ══════════════════════════════════════
 #  CSV IMPORT DIALOG
 # ══════════════════════════════════════
+# ══════════════════════════════════════
+#  EDIT IOC DIALOG
+# ══════════════════════════════════════
+class EditIOCDialog(QDialog):
+    def __init__(self, parent, ioc):
+        super().__init__(parent)
+        self.ioc = ioc
+        self.setWindowTitle(f"Edit IOC — {ioc['id']}")
+        self.setMinimumWidth(500)
+        self.setStyleSheet("QDialog{background:#1a1d23;}")
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+
+        # Value
+        self.value_edit = QLineEdit(ioc.get("value", ""))
+        layout.addWidget(_field("Value", self.value_edit))
+
+        # Threat + Action
+        row = QHBoxLayout()
+        self.threat_combo = QComboBox()
+        for k in THREAT_LEVELS:
+            self.threat_combo.addItem(k)
+        self.threat_combo.setCurrentText(ioc.get("threatLevel", "MEDIUM"))
+        self.action_combo = QComboBox()
+        self.action_combo.addItems(ACTIONS)
+        self.action_combo.setCurrentText(ioc.get("action", "Monitor"))
+        row.addWidget(_field("Threat Level", self.threat_combo))
+        row.addWidget(_field("Action", self.action_combo))
+        layout.addLayout(row)
+
+        # Source
+        self.source_edit = QLineEdit(ioc.get("source", ""))
+        layout.addWidget(_field("Source", self.source_edit))
+
+        # Country (for AM_USER/DEALER_ID)
+        if ioc.get("type") in ("AM_USER", "DEALER_ID"):
+            self.country_edit = QLineEdit(ioc.get("country", ""))
+            layout.addWidget(_field("Country", self.country_edit))
+        else:
+            self.country_edit = None
+
+        # Tool cost
+        if ioc.get("type") == "TOOL":
+            self.tool_cost = QDoubleSpinBox()
+            self.tool_cost.setPrefix("$ ")
+            self.tool_cost.setMaximum(999999)
+            self.tool_cost.setDecimals(2)
+            self.tool_cost.setValue(ioc.get("toolCost", 0) or 0)
+            layout.addWidget(_field("Purchase Cost", self.tool_cost))
+        else:
+            self.tool_cost = None
+
+        # Tags
+        self.tags_edit = QLineEdit(", ".join(ioc.get("tags", [])))
+        layout.addWidget(_field("Tags (comma-separated)", self.tags_edit))
+
+        # Notes
+        self.notes_edit = QTextEdit()
+        self.notes_edit.setPlainText(ioc.get("notes", ""))
+        self.notes_edit.setMaximumHeight(100)
+        layout.addWidget(_field("Analyst Notes", self.notes_edit))
+
+        # Status
+        row2 = QHBoxLayout()
+        self.status_combo = QComboBox()
+        self.status_combo.addItems(["active", "monitoring", "resolved"])
+        self.status_combo.setCurrentText(ioc.get("status", "active"))
+        row2.addWidget(_field("Status", self.status_combo))
+        row2.addStretch()
+        layout.addLayout(row2)
+
+        # Buttons
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setObjectName("btnDark")
+        cancel_btn.clicked.connect(self.reject)
+        save_btn = QPushButton("Save Changes")
+        save_btn.setObjectName("btnRed")
+        save_btn.clicked.connect(self.accept)
+        btn_layout.addWidget(cancel_btn)
+        btn_layout.addWidget(save_btn)
+        layout.addLayout(btn_layout)
+
+    def get_updated(self):
+        result = {
+            "value": self.value_edit.text().strip(),
+            "threatLevel": self.threat_combo.currentText(),
+            "action": self.action_combo.currentText(),
+            "source": self.source_edit.text().strip(),
+            "tags": [t.strip() for t in self.tags_edit.text().split(",") if t.strip()],
+            "notes": self.notes_edit.toPlainText(),
+            "status": self.status_combo.currentText(),
+        }
+        if self.country_edit is not None:
+            result["country"] = self.country_edit.text().strip()
+        if self.tool_cost is not None:
+            result["toolCost"] = self.tool_cost.value() if self.tool_cost.value() > 0 else None
+        return result
+
+
 class CSVImportDialog(QDialog):
     def __init__(self, parent, filepath, settings_dir=""):
         super().__init__(parent)
@@ -1012,25 +1118,35 @@ class MainWindow(QMainWindow):
         idl = QLabel(ioc["id"])
         idl.setFont(MONO)
         idl.setStyleSheet("color:#6b7280;font-size:13px;")
+        idl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         tl = THREAT_LEVELS[ioc["threatLevel"]]
         thl = QLabel(ioc["threatLevel"])
         thl.setStyleSheet(f"color:{tl[0]};font-weight:700;font-size:12px;padding:2px 8px;background:{tl[1]};border-radius:4px;")
         hx.addWidget(idl)
         hx.addWidget(thl)
         hx.addStretch()
+        edit_btn = QPushButton("✏ Edit")
+        edit_btn.setObjectName("btnDark")
+        edit_btn.clicked.connect(lambda: self._edit_ioc(ioc["id"]))
+        hx.addWidget(edit_btn)
+        del_btn = QPushButton("🗑 Delete")
+        del_btn.setStyleSheet("color:#ff1744;background:transparent;border:1px solid #ff174450;border-radius:6px;padding:7px 12px;font-size:12px;font-weight:600;")
+        del_btn.clicked.connect(lambda: self._delete_ioc(ioc["id"]))
+        hx.addWidget(del_btn)
         cb = QPushButton("✕")
         cb.setObjectName("btnDark")
         cb.clicked.connect(self._close_detail)
         hx.addWidget(cb)
         self.detail_layout.addWidget(hw)
 
-        # Type + Value
+        # Type + Value (selectable)
         t = IOC_TYPES.get(ioc["type"], ("?", "#999"))
         self.detail_layout.addWidget(QLabel(f"<span style='color:{t[1]};font-weight:600'>{t[0]}</span>"))
         vl = QLabel(ioc["value"])
         vl.setFont(QFont("Consolas", 14, QFont.Weight.Bold))
         vl.setWordWrap(True)
         vl.setStyleSheet("margin:4px 0 8px 0;")
+        vl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.detail_layout.addWidget(vl)
 
         # Country
@@ -1121,6 +1237,7 @@ class MainWindow(QMainWindow):
             nl = QLabel(ioc["notes"])
             nl.setWordWrap(True)
             nl.setStyleSheet("color:#c0c4cc;font-size:13px;background:#12141a;padding:10px;border-radius:8px;border:1px solid #2a2d35;")
+            nl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             self.detail_layout.addWidget(nl)
 
         # Correlated
@@ -1129,8 +1246,10 @@ class MainWindow(QMainWindow):
             self.detail_layout.addWidget(QLabel(f"<span style='color:#ff1744;font-weight:600'>⚡ Correlated IOCs ({len(corr)})</span>"))
             for c in corr:
                 ct = IOC_TYPES.get(c["type"], ("?", "#999"))
-                cl = QLabel(f"  {c['id'][-8:]}  {ct[0]}  {c['value'][:50]}")
+                cl = QLabel(f"  {c['id']}  {ct[0]}  {c['value']}")
                 cl.setStyleSheet("color:#c0c4cc;font-size:12px;background:#12141a;padding:6px 10px;border-radius:6px;border:1px solid #2a2d35;margin:2px 0;")
+                cl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+                cl.setCursor(Qt.CursorShape.IBeamCursor)
                 self.detail_layout.addWidget(cl)
 
         self.detail_layout.addStretch()
@@ -1152,6 +1271,46 @@ class MainWindow(QMainWindow):
             self.store.save()
             self._refresh_table()
             self._show_detail(ioc)
+
+    def _edit_ioc(self, ioc_id):
+        ioc = self.store.get_ioc(ioc_id)
+        if not ioc:
+            return
+        dlg = EditIOCDialog(self, ioc)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            updated = dlg.get_updated()
+            for k, v in updated.items():
+                ioc[k] = v
+            self.store.save()
+            self._refresh_table()
+            self._show_detail(ioc)
+
+    def _delete_ioc(self, ioc_id):
+        reply = QMessageBox.question(self, "Delete IOC",
+            f"Delete IOC {ioc_id}? This cannot be undone.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if reply == QMessageBox.StandardButton.Yes:
+            self.store.iocs = [i for i in self.store.iocs if i["id"] != ioc_id]
+            # Remove from correlations
+            for i in self.store.iocs:
+                if ioc_id in i.get("correlations", []):
+                    i["correlations"].remove(ioc_id)
+            self.store.save()
+            self._close_detail()
+            self._refresh_table()
+
+    def _delete_ta(self, ta_id):
+        reply = QMessageBox.question(self, "Delete Threat Actor",
+            f"Delete this Threat Actor? IOCs linked to it will be unlinked.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if reply == QMessageBox.StandardButton.Yes:
+            self.store.actors = [a for a in self.store.actors if a["id"] != ta_id]
+            for i in self.store.iocs:
+                if i.get("linkedTA") == ta_id:
+                    i["linkedTA"] = None
+            self.store.save()
+            self._refresh_actors()
+            self._close_detail()
 
     def _enrich(self, ioc_id, service):
         ioc = self.store.get_ioc(ioc_id)
@@ -1200,6 +1359,10 @@ class MainWindow(QMainWindow):
             hdr.addStretch()
             linked = self.store.get_linked_iocs(actor["id"])
             hdr.addWidget(QLabel(f"<span style='color:#6b7280;font-size:11px'>{len(linked)} IOCs</span>"))
+            del_ta_btn = QPushButton("🗑")
+            del_ta_btn.setStyleSheet("color:#ff1744;background:transparent;border:none;font-size:14px;padding:2px 6px;")
+            del_ta_btn.clicked.connect(lambda _, tid=actor["id"]: self._delete_ta(tid))
+            hdr.addWidget(del_ta_btn)
             cl.addLayout(hdr)
             if actor.get("reportRef"):
                 cl.addWidget(QLabel(f"<span style='color:#6b7280;font-size:11px'>Report: {actor['reportRef']}</span>"))
